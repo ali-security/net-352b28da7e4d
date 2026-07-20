@@ -1,0 +1,47 @@
+name: seal-build
+
+on: [push, workflow_dispatch]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Build module zip via x/mod helper
+        run: |
+          set -euo pipefail
+          HELPER="$(mktemp -d)"
+          cp "$GITHUB_WORKSPACE/.github/create_mod.go" "$HELPER/create_mod.go"
+          cd "$HELPER"
+          go mod init example.com/mod
+          go get golang.org/x/mod@v0.24.0
+          go build -o create_mod create_mod.go
+          mkdir -p "$RUNNER_TEMP/out"
+          # x/mod zip.CreateFromDir descends into .github and would leak the
+          # seal workflow + helper into the module zip as extra files. Upstream
+          # x/net ships no .github dir, so remove it before packaging. The
+          # helper is already copied out and built, so this is safe. Keep
+          # .gitignore/.gitattributes — those ARE in the public proxy zip.
+          rm -rf "$GITHUB_WORKSPACE/.github"
+          "$HELPER/create_mod" golang.org/x/net v0.45.0 "$GITHUB_WORKSPACE" "$RUNNER_TEMP/out/v0.45.0.zip"
+
+      - name: Build and test
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          go build ./...
+          go test ./...
+
+      - name: Upload module zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: module-zip
+          path: ${{ runner.temp }}/out/v0.45.0.zip
+          if-no-files-found: error
